@@ -62,6 +62,8 @@ mod helpers;
 mod hypertree;
 mod slh;
 mod types;
+#[cfg(feature = "slh_dsa_sha2_128s")]
+mod verify_mono; // Aeneas-compat monomorphic verify path (formal-verification campaign; additive)
 mod wots;
 mod xmss;
 
