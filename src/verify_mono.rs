@@ -72,11 +72,16 @@ pub(crate) mod oracle {
         crate::hashers::sha2_cat_1::t_l::<X, N>(pk_seed, adrs, ml)
     }
 
+    // Aeneas-compat: takes the message digest input M' as a SINGLE contiguous
+    // slice (nested `&[&[u8]]` is untranslatable; see dalek verify_sha512).
+    // H_msg hashes r ‖ pk_seed ‖ pk_root ‖ M', and SHA-256 is over the byte
+    // concatenation, so passing the pre-concatenated M' as one slice yields the
+    // identical digest to the deployed multi-slice call.
     #[inline(never)]
     pub(crate) fn h_msg<const M: usize>(
-        r: &[u8], pk_seed: &[u8], pk_root: &[u8], m: &[&[u8]],
+        r: &[u8], pk_seed: &[u8], pk_root: &[u8], mprime: &[u8],
     ) -> [u8; M] {
-        crate::hashers::sha2_cat_1::h_msg::<M>(r, pk_seed, pk_root, m)
+        crate::hashers::sha2_cat_1::h_msg::<M>(r, pk_seed, pk_root, &[mprime])
     }
 }
 
@@ -274,7 +279,7 @@ pub(crate) fn slh_verify_internal_free<
     const M: usize,
     const N: usize,
 >(
-    m: &[&[u8]], sig: &SlhDsaSig<A, D, HP, K, LEN, N>, pk: &SlhPublicKey<N>,
+    mprime: &[u8], sig: &SlhDsaSig<A, D, HP, K, LEN, N>, pk: &SlhPublicKey<N>,
 ) -> bool {
     let (d32, h32) = (u32::try_from(D).unwrap(), u32::try_from(H).unwrap());
 
@@ -284,7 +289,7 @@ pub(crate) fn slh_verify_internal_free<
     let sig_fors = &sig.fors_sig;
     let sig_ht = &sig.ht_sig;
 
-    let digest = oracle::h_msg::<M>(r, &pk.pk_seed, &pk.pk_root, m);
+    let digest = oracle::h_msg::<M>(r, &pk.pk_seed, &pk.pk_root, mprime);
 
     let index1 = (K * A + 7) / 8;
     let md = &digest[0..index1];
@@ -303,7 +308,12 @@ pub(crate) fn slh_verify_internal_free<
 
     adrs.set_tree_address(idx_tree);
     adrs.set_type_and_clear(FORS_TREE);
-    let Ok(idx_leaf_u32) = u32::try_from(idx_leaf) else { return false };
+    // Aeneas-compat: is_err/unwrap idiom (translatable) instead of let-else.
+    let idx_leaf_u32 = u32::try_from(idx_leaf);
+    if idx_leaf_u32.is_err() {
+        return false;
+    }
+    let idx_leaf_u32 = idx_leaf_u32.unwrap();
     adrs.set_key_pair_address(idx_leaf_u32);
 
     let pk_fors = fors_pk_from_sig_free::<A, K, N>(sig_fors, md, &pk.pk_seed, &adrs);
@@ -322,10 +332,13 @@ pub(crate) fn slh_verify_internal_free<
 // Monomorphic entry: SLH-DSA-SHA2-128s (N=16, H=63, D=7, HP=9, A=12, K=14,
 // M=30, LEN=2*N+3=35). This is the single extraction root.
 // ---------------------------------------------------------------------------
+// `mprime` is the FIPS 205 message digest input M' = toByte(0,1) ‖
+// toByte(|ctx|,1) ‖ ctx ‖ M, pre-concatenated into one slice (the wrappers
+// that build M' are out of scope; Algorithm 20's input is already M').
 pub(crate) fn slh_verify_128s(
-    m: &[&[u8]], sig: &SlhDsaSig<12, 7, 9, 14, 35, 16>, pk: &SlhPublicKey<16>,
+    mprime: &[u8], sig: &SlhDsaSig<12, 7, 9, 14, 35, 16>, pk: &SlhPublicKey<16>,
 ) -> bool {
-    slh_verify_internal_free::<12, 7, 63, 9, 14, 35, 30, 16>(m, sig, pk)
+    slh_verify_internal_free::<12, 7, 63, 9, 14, 35, 30, 16>(mprime, sig, pk)
 }
 
 // ---------------------------------------------------------------------------
@@ -366,14 +379,15 @@ mod tests {
 
             let sig_bytes = sk.try_sign_with_rng(&mut rng, &msg, &[], false).unwrap();
 
-            // empty-ctx M' framing, exactly as PublicKey::verify builds it
-            let mp: &[&[u8]] = &[&[0u8], &[0u8], &[], &msg];
+            // empty-ctx M' = toByte(0,1) ‖ toByte(0,1) ‖ <> ‖ msg, concatenated
+            // (byte-identical to the &[&[0],&[0],&[],msg] the deployed path hashes)
+            let mprime = [0u8, 0u8, msg[0], msg[1], msg[2], msg[3], msg[4]];
 
             let (internal_pk, sig) = internal_inputs(&pk, &sig_bytes);
 
             // 1) valid signature: deployed accepts, mono must accept, and agree
             let deployed_ok = pk.verify(&msg, &sig_bytes, &[]);
-            let mono_ok = slh_verify_128s(mp, &sig, &internal_pk);
+            let mono_ok = slh_verify_128s(&mprime, &sig, &internal_pk);
             assert!(deployed_ok, "deployed verify rejected a fresh valid signature");
             assert_eq!(mono_ok, deployed_ok, "mono disagrees with deployed on valid sig");
 
@@ -382,15 +396,15 @@ mod tests {
             bad_bytes[100] ^= 0x01;
             let (_, bad_sig) = internal_inputs(&pk, &bad_bytes);
             let deployed_bad = pk.verify(&msg, &bad_bytes, &[]);
-            let mono_bad = slh_verify_128s(mp, &bad_sig, &internal_pk);
+            let mono_bad = slh_verify_128s(&mprime, &bad_sig, &internal_pk);
             assert_eq!(mono_bad, deployed_bad, "mono disagrees with deployed on corrupt sig");
             assert!(!mono_bad, "corrupt signature accepted");
 
             // 3) wrong message: both must reject, together
             let other = [round, 0x11, 0x22, 0x33, round.wrapping_mul(7).wrapping_add(1)];
-            let mp2: &[&[u8]] = &[&[0u8], &[0u8], &[], &other];
+            let mprime2 = [0u8, 0u8, other[0], other[1], other[2], other[3], other[4]];
             let deployed_wm = pk.verify(&other, &sig_bytes, &[]);
-            let mono_wm = slh_verify_128s(mp2, &sig, &internal_pk);
+            let mono_wm = slh_verify_128s(&mprime2, &sig, &internal_pk);
             assert_eq!(mono_wm, deployed_wm, "mono disagrees with deployed on wrong message");
             assert!(!mono_wm, "wrong-message signature accepted");
         }
