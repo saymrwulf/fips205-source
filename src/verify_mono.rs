@@ -107,7 +107,9 @@ pub(crate) fn chain_free<const N: usize>(
 pub(crate) fn wots_pk_from_sig_free<const LEN: usize, const N: usize>(
     sig: &WotsSig<LEN, N>, m: &[u8], pk_seed: &[u8], adrs: &Adrs,
 ) -> WotsPk<N> {
-    let n32 = u32::try_from(N).unwrap();
+    // Aeneas-compat: plain cast for const-generic params (Result plumbing is
+    // untranslatable-clean; every FIPS 205 parameter is <= 63, cast lossless).
+    let n32 = N as u32;
     let mut adrs = adrs.clone();
     let mut tmp = [[0u8; N]; LEN];
 
@@ -115,8 +117,10 @@ pub(crate) fn wots_pk_from_sig_free<const LEN: usize, const N: usize>(
     let mut msg = [0u32; LEN];
     base_2b(m, crate::LGW, 2 * n32, &mut msg[0..(2 * N)]);
 
-    for item in msg.iter().take(2 * N) {
-        csum += crate::W - 1 - item;
+    // Aeneas-compat: index loop with value reads (iterator adapters and the
+    // &u32 Sub instance are untranslatable); same first-2N iteration space.
+    for i in 0..(2 * N) {
+        csum += crate::W - 1 - msg[i];
     }
 
     csum <<= (8 - ((crate::LEN2 * crate::LGW) & 0x07)) & 0x07;
@@ -152,7 +156,7 @@ pub(crate) fn wots_pk_from_sig_free<const LEN: usize, const N: usize>(
 pub(crate) fn xmss_pk_from_sig_free<const HP: usize, const LEN: usize, const N: usize>(
     idx: u32, sig_xmss: &XmssSig<HP, LEN, N>, m: &[u8], pk_seed: &[u8], adrs: &Adrs,
 ) -> [u8; N] {
-    let hp32 = u32::try_from(HP).unwrap();
+    let hp32 = HP as u32; // Aeneas-compat: lossless (HP <= 63 in all sets)
     let mut adrs = adrs.clone();
 
     adrs.set_type_and_clear(WOTS_HASH);
@@ -191,7 +195,7 @@ pub(crate) fn ht_verify_free<const D: usize, const HP: usize, const LEN: usize, 
     pk_root: &[u8; N],
 ) -> bool {
     let mut idx_tree = idx_tree;
-    let (d32, hp32) = (u32::try_from(D).unwrap(), u32::try_from(HP).unwrap());
+    let (d32, hp32) = (D as u32, HP as u32); // Aeneas-compat: lossless casts
 
     let mut adrs = Adrs::default();
     adrs.set_tree_address(idx_tree);
@@ -200,11 +204,11 @@ pub(crate) fn ht_verify_free<const D: usize, const HP: usize, const LEN: usize, 
     let mut node = xmss_pk_from_sig_free::<HP, LEN, N>(idx_leaf, &sig_tmp, m, pk_seed, &adrs);
 
     for j in 1..d32 {
-        let idx_leaf = u32::try_from(idx_tree & ((1 << hp32) - 1));
-        if idx_leaf.is_err() {
-            return false;
-        };
-        let idx_leaf = idx_leaf.unwrap();
+        // Aeneas-compat: plain cast (Result plumbing untranslatable-clean).
+        // The value is masked to hp' bits and hp' <= 9 for every FIPS 205
+        // parameter set, so the u32 conversion cannot fail: identical.
+        #[allow(clippy::cast_possible_truncation)]
+        let idx_leaf = (idx_tree & ((1 << hp32) - 1)) as u32;
 
         idx_tree >>= hp32;
 
@@ -224,7 +228,7 @@ pub(crate) fn ht_verify_free<const D: usize, const HP: usize, const LEN: usize, 
 pub(crate) fn fors_pk_from_sig_free<const A: usize, const K: usize, const N: usize>(
     sig_fors: &ForsSig<A, K, N>, md: &[u8], pk_seed: &[u8], adrs: &Adrs,
 ) -> ForsPk<N> {
-    let (a32, k32) = (u32::try_from(A).unwrap(), u32::try_from(K).unwrap());
+    let (a32, k32) = (A as u32, K as u32); // Aeneas-compat: lossless casts
     let mut adrs = adrs.clone();
 
     let mut indices = [0u32; K];
@@ -281,7 +285,7 @@ pub(crate) fn slh_verify_internal_free<
 >(
     mprime: &[u8], sig: &SlhDsaSig<A, D, HP, K, LEN, N>, pk: &SlhPublicKey<N>,
 ) -> bool {
-    let (d32, h32) = (u32::try_from(D).unwrap(), u32::try_from(H).unwrap());
+    let (d32, h32) = (D as u32, H as u32); // Aeneas-compat: lossless casts
 
     let mut adrs = Adrs::default();
 
@@ -308,12 +312,11 @@ pub(crate) fn slh_verify_internal_free<
 
     adrs.set_tree_address(idx_tree);
     adrs.set_type_and_clear(FORS_TREE);
-    // Aeneas-compat: is_err/unwrap idiom (translatable) instead of let-else.
-    let idx_leaf_u32 = u32::try_from(idx_leaf);
-    if idx_leaf_u32.is_err() {
-        return false;
-    }
-    let idx_leaf_u32 = idx_leaf_u32.unwrap();
+    // Aeneas-compat: plain cast (Result plumbing untranslatable-clean). The
+    // value is masked to h/d bits above and h/d <= 9 for every FIPS 205
+    // parameter set, so the u32 conversion cannot fail: identical.
+    #[allow(clippy::cast_possible_truncation)]
+    let idx_leaf_u32 = idx_leaf as u32;
     adrs.set_key_pair_address(idx_leaf_u32);
 
     let pk_fors = fors_pk_from_sig_free::<A, K, N>(sig_fors, md, &pk.pk_seed, &adrs);
