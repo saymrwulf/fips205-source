@@ -4,7 +4,6 @@
 **/corpus
 **/target
 /fuzz/.gitignore
-**/Cargo.lock
 **/package-lock.json
 **/node_modules
 **/pkg

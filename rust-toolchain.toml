@@ -1,0 +1,6 @@
+# Pinned to the exact nightly the Charon/Aeneas transpiler uses (see
+# aeneas-toolchain/aeneas/charon/rust-toolchain). This aligns `charon cargo`
+# extraction and the `cargo test` differential harness on one compiler, and
+# documents the toolchain for reproducible regeneration of the Lean model.
+[toolchain]
+channel = "nightly-2026-06-01"
