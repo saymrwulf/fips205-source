@@ -14,10 +14,13 @@ pub(crate) fn to_int(x: &[u8], n: u32) -> u64 {
     let mut total = 0;
 
     // 2: for i from 0 to n − 1 do
-    for item in x.iter().take(n as usize) {
+    // Aeneas-compat: index loop instead of iter().take() (the Take iterator
+    // adapter is untranslatable-clean; x.len() == n by the assert above, so
+    // 0..n indexes exactly the same elements in the same order — identical).
+    for i in 0..(n as usize) {
         //
         // 3: total ← 256 · total + X[i]
-        total = (total << 8) + u64::from(*item);
+        total = (total << 8) + u64::from(x[i]);
 
         // 4: end for
     }
@@ -77,7 +80,11 @@ pub(crate) fn base_2b(x: &[u8], b: u32, out_len: u32, baseb: &mut [u32]) {
     let mut total = 0;
 
     // 4: for out from 0 to out_len − 1 do
-    for item in baseb.iter_mut() {
+    // Aeneas-compat: index loop instead of iter_mut() (the IterMut adapter with
+    // its next_back write-back closure is untranslatable-clean; out_len ==
+    // baseb.len() by the assert above, so 0..out_len writes exactly the same
+    // slots in the same order with the same values — identical).
+    for out in 0..(out_len as usize) {
         //
         // 5: while bits < b do
         while bits < b {
@@ -98,7 +105,7 @@ pub(crate) fn base_2b(x: &[u8], b: u32, out_len: u32, baseb: &mut [u32]) {
         bits -= b;
 
         // 11: baseb[out] ← (total ≫ bits) mod 2^b
-        *item = (total >> bits) & (u32::MAX >> (32 - b));
+        baseb[out] = (total >> bits) & (u32::MAX >> (32 - b));
 
         // 12: end for
     }
